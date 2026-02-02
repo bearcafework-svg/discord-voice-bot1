@@ -14,9 +14,11 @@ client.once("clientReady", () => {
   console.log(`Bot logged in as ${client.user.tag}`);
 });
 
-client.once("voiceStateUpdate", async (oldState, newState) => {
+client.on("voiceStateUpdate", async (oldState, newState) => {
+  if (oldState.channelId === newState.channelId) return;
+
   try {
-    await axios.post(WEBHOOK_URL, {
+    await axios.post(process.env.WEBHOOK_URL, {
       event: "VOICE_STATE_UPDATE",
       data: {
         user_id: newState.id,
@@ -31,5 +33,6 @@ client.once("voiceStateUpdate", async (oldState, newState) => {
 });
 
 client.login(process.env.BOT_TOKEN);
+
 
 
