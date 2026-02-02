@@ -10,11 +10,11 @@ const client = new Client({
 
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
-client.on("clientReady", () => {
+client.once("clientReady", () => {
   console.log(`Bot logged in as ${client.user.tag}`);
 });
 
-client.on("voiceStateUpdate", async (oldState, newState) => {
+client.once("voiceStateUpdate", async (oldState, newState) => {
   try {
     await axios.post(WEBHOOK_URL, {
       event: "VOICE_STATE_UPDATE",
@@ -31,4 +31,5 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 });
 
 client.login(process.env.BOT_TOKEN);
+
 
