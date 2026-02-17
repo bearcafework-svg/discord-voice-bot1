@@ -15,14 +15,18 @@ client.once("clientReady", () => {
 });
 
 client.on("voiceStateUpdate", async (oldState, newState) => {
+  // กรองกรณีที่ไม่ได้ย้ายห้อง (เช่น Mute/Deafen)
   if (oldState.channelId === newState.channelId) return;
 
   try {
+    console.log(`User ${newState.id} changed voice state: ${oldState.channelId} -> ${newState.channelId}`);
+    
     await axios.post(process.env.WEBHOOK_URL, {
       event: "VOICE_STATE_UPDATE",
       data: {
         user_id: newState.id,
-        channel_id: newState.channelId,
+        // ใช้ || null เพื่อกันเหนียว กรณี newState.channelId เป็น undefined จะได้ส่ง null ไปแน่นอน
+        channel_id: newState.channelId || null, 
         channel_name: newState.channel?.name ?? null,
         guild_id: newState.guild.id
       }
@@ -33,6 +37,3 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 });
 
 client.login(process.env.BOT_TOKEN);
-
-
-
