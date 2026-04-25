@@ -29,7 +29,8 @@ function getUserCountInChannel(guild, channelId) {
   ).size;
 }
 
-async function awardVoicePoints(userId, durationSeconds, userCount, parentId) {
+// ✅ แก้ให้รับ channelName แทน parentId
+async function awardVoicePoints(userId, durationSeconds, userCount, channelName, parentId) {
   if (!VOICE_POINTS_URL) return;
   if (parentId === EXCLUDED_CATEGORY_ID) {
     console.log(`[points] ${userId} skipped — excluded category`);
@@ -39,7 +40,7 @@ async function awardVoicePoints(userId, durationSeconds, userCount, parentId) {
   try {
     const res = await axios.post(
       VOICE_POINTS_URL,
-      { eventId, userId, duration: durationSeconds, userCount },
+      { eventId, userId, duration: durationSeconds, userCount, channelName },
       { timeout: 10000 }
     );
     const d = res.data;
@@ -62,6 +63,7 @@ client.once("clientReady", async () => {
         voiceJoinTimes.set(memberId, {
           joinedAt: Date.now(),
           channelId: voiceState.channelId,
+          channelName: voiceState.channel?.name ?? null, // ✅ เพิ่ม channelName
           parentId: voiceState.channel?.parentId ?? null,
         });
         try {
@@ -93,10 +95,11 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     const session = voiceJoinTimes.get(userId);
     if (session) {
       const durationSeconds = Math.floor((Date.now() - session.joinedAt) / 1000);
-      const userCount = getUserCountInChannel(oldState.guild, oldState.channelId) + 1;
-      const parentId  = oldState.channel?.parentId ?? null;
+      const userCount   = getUserCountInChannel(oldState.guild, oldState.channelId) + 1;
+      const channelName = oldState.channel?.name ?? "ห้องพูดคุย"; // ✅
+      const parentId    = oldState.channel?.parentId ?? null;
       console.log(`[voice] ${userId} left after ${durationSeconds}s (cat: ${parentId})`);
-      awardVoicePoints(userId, durationSeconds, userCount, parentId);
+      awardVoicePoints(userId, durationSeconds, userCount, channelName, parentId); // ✅
     }
     voiceJoinTimes.delete(userId);
   }
@@ -106,6 +109,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     voiceJoinTimes.set(userId, {
       joinedAt: Date.now(),
       channelId: newState.channelId,
+      channelName: newState.channel?.name ?? null, // ✅ เพิ่ม channelName
       parentId: newState.channel?.parentId ?? null,
     });
   }
@@ -115,14 +119,16 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     const session = voiceJoinTimes.get(userId);
     if (session) {
       const durationSeconds = Math.floor((Date.now() - session.joinedAt) / 1000);
-      const userCount = getUserCountInChannel(oldState.guild, oldState.channelId) + 1;
-      const parentId  = oldState.channel?.parentId ?? null;
+      const userCount   = getUserCountInChannel(oldState.guild, oldState.channelId) + 1;
+      const channelName = oldState.channel?.name ?? "ห้องพูดคุย"; // ✅
+      const parentId    = oldState.channel?.parentId ?? null;
       console.log(`[voice] ${userId} moved after ${durationSeconds}s (cat: ${parentId})`);
-      awardVoicePoints(userId, durationSeconds, userCount, parentId);
+      awardVoicePoints(userId, durationSeconds, userCount, channelName, parentId); // ✅
     }
     voiceJoinTimes.set(userId, {
       joinedAt: Date.now(),
       channelId: newState.channelId,
+      channelName: newState.channel?.name ?? null, // ✅ เพิ่ม channelName
       parentId: newState.channel?.parentId ?? null,
     });
   }
