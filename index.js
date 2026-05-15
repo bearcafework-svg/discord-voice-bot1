@@ -84,6 +84,41 @@ client.once("clientReady", async () => {
   }
 });
 
+// ── Voice count heartbeat ─────────────────────────────────────────────────────
+// Re-upserts all currently connected voice states every 15 minutes so the
+// frontend count (which filters by updated_at recency) stays accurate even
+// when users sit in a channel without moving.
+const HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+
+async function sendVoiceHeartbeat() {
+  let total = 0;
+  for (const guild of client.guilds.cache.values()) {
+    for (const [memberId, voiceState] of guild.voiceStates.cache) {
+      if (!voiceState.channelId || voiceState.member?.user?.bot) continue;
+      try {
+        await axios.post(WEBHOOK_URL, {
+          event: "VOICE_STATE_UPDATE",
+          data: {
+            user_id: memberId,
+            channel_id: voiceState.channelId,
+            channel_name: voiceState.channel?.name ?? null,
+            guild_id: guild.id
+          }
+        });
+        total++;
+      } catch (err) {
+        console.error(`[heartbeat] Error for ${memberId}:`, err.message);
+      }
+    }
+  }
+  console.log(`[heartbeat] Refreshed ${total} voice state(s)`);
+}
+
+setInterval(() => {
+  if (!client.isReady()) return;
+  sendVoiceHeartbeat();
+}, HEARTBEAT_INTERVAL_MS);
+
 client.on("voiceStateUpdate", async (oldState, newState) => {
   if (oldState.channelId === newState.channelId) return;
 
