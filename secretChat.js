@@ -44,8 +44,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   {
     realtime: {
-      enabled: false,
-      params: { transport: ws }
+      transport: ws,
     },
     auth: {
       persistSession: false,
