@@ -9,6 +9,7 @@ const {
 } = require("discord.js");
 const crypto = require("crypto");
 const { createClient } = require("@supabase/supabase-js");
+const ws = require("ws");
 
 // ============================================================================
 // SYSTEM CONFIGURATION & CONSTANTS
@@ -42,7 +43,10 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   {
-    realtime: { enabled: false }, // บังคับปิด Realtime ตามเงื่อนไขของ Koyeb
+    realtime: {
+      enabled: false,
+      params: { transport: ws }
+    },
     auth: {
       persistSession: false,
       autoRefreshToken: false,
