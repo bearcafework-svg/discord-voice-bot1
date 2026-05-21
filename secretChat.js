@@ -28,7 +28,7 @@ const REPORT_USER_CUSTOM_ID = "btn_report_user";
 // ============================================================================
 // IN-MEMORY STATE MANAGEMENT (VOLATILE)
 // ============================================================================
-const queue =;
+const queue = [];
 const activeUsers = new Set();
 const tableMembers = new Map();
 const sessionTimers = new Map();
@@ -65,7 +65,11 @@ process.on("uncaughtException", (error) => {
 // UTILITY & HELPER FUNCTIONS
 // ============================================================================
 function buildAllowedPermissions() {
-  return;
+  return [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.ReadMessageHistory,
+  ];
 }
 
 function buildActionRow() {
@@ -97,7 +101,7 @@ function isUserBusy(userId) {
 
 function checkSpamRateLimit(userId) {
   const now = Date.now();
-  const timestamps = spamTracker.get(userId) ||;
+  const timestamps = spamTracker.get(userId) || [];
   // กรองเอาเฉพาะที่กดเข้ามาภายใน 60 วินาที
   const recent = timestamps.filter((time) => now - time < 60000); 
   recent.push(now);
@@ -144,7 +148,8 @@ async function createSecretChatChannel(guild, userAId, userBId) {
     name: `☕-โต๊ะลับ-${suffix}`,
     type: ChannelType.GuildText,
     parent: SECRET_CHAT_CATEGORY_ID,
-    permissionOverwrites: },
+    permissionOverwrites: [
+      { id: guild.roles.everyone, deny: [PermissionFlagsBits.ViewChannel] },
       { id: userAId, allow: buildAllowedPermissions() },
       { id: userBId, allow: buildAllowedPermissions() }
     ]
@@ -152,7 +157,7 @@ async function createSecretChatChannel(guild, userAId, userBId) {
 
   activeUsers.add(userAId);
   activeUsers.add(userBId);
-  tableMembers.set(channel.id, new Set());
+  tableMembers.set(channel.id, new Set([userAId, userBId]));
   
   // สร้าง Timestamp ป้องกันการออกแล้วเข้าใหม่เจอคนเดิมทันที (5 นาที)
   recentMatches.set(`${userAId}-${userBId}`, Date.now());
@@ -163,7 +168,7 @@ async function createSecretChatChannel(guild, userAId, userBId) {
 
   await channel.send({
     content: `☕ โต๊ะลับพร้อมแล้วค่ะ\n\nยินดีต้อนรับ <@${userAId}> และ <@${userBId}> ✨\nระยะเวลาสนทนา 7 นาที (หมดเวลา: <t:${endTime}:R>)\nสามารถพูดคุยกันได้ตามสบายเลยนะคะ`,
-    components:
+    components: [buildActionRow()]
   });
 
   // สร้างระบบจับเวลาอิสระ (Asynchronous Timers)
@@ -233,7 +238,7 @@ async function handleJoinQueue(interaction) {
   });
 
   if (partnerIndex!== -1) {
-    const waitingUserId = queue.splice(partnerIndex, 1);
+    const [waitingUserId] = queue.splice(partnerIndex, 1);
     try {
       await createSecretChatChannel(interaction.guild, waitingUserId, userId);
       await interaction.editReply("จับคู่สำเร็จแล้วค่ะ ✨ ขอให้สนุกนะคะ");
