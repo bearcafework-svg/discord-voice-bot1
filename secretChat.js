@@ -71,13 +71,13 @@ function buildAllowedPermissions() {
 function buildActionRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-    .setCustomId(LEAVE_TABLE_CUSTOM_ID)
-    .setLabel("🚪 ลุกจากโต๊ะ")
-    .setStyle(ButtonStyle.Danger),
+   .setCustomId(LEAVE_TABLE_CUSTOM_ID)
+   .setLabel("🚪 ลุกจากโต๊ะ")
+   .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
-    .setCustomId(REPORT_USER_CUSTOM_ID)
-    .setLabel("⚠️ แจ้งรีพอร์ต")
-    .setStyle(ButtonStyle.Secondary)
+   .setCustomId(REPORT_USER_CUSTOM_ID)
+   .setLabel("⚠️ แจ้งรีพอร์ต")
+   .setStyle(ButtonStyle.Secondary)
   );
 }
 
@@ -144,7 +144,8 @@ async function createSecretChatChannel(guild, userAId, userBId) {
     name: `☕-โต๊ะลับ-${suffix}`,
     type: ChannelType.GuildText,
     parent: SECRET_CHAT_CATEGORY_ID,
-    permissionOverwrites: },
+    permissionOverwrites:
+      },
       { id: userAId, allow: buildAllowedPermissions() },
       { id: userBId, allow: buildAllowedPermissions() }
     ]
@@ -300,8 +301,8 @@ async function handleReportUser(interaction) {
   try {
     // ส่งข้อมูล Metadata ไปยัง Supabase (เก็บเฉพาะ ID ห้ามเก็บข้อความ)
     const { error } = await supabase
-    .from("secret_chat_reports")
-    .insert([
+   .from("secret_chat_reports")
+   .insert([
         {
           reporter_id: reporterId,
           reported_id: reportedId,
@@ -336,17 +337,17 @@ function setupSecretChat(client) {
     try { await message.delete(); } catch (e) {}
 
     const embed = new EmbedBuilder()
-    .setColor("#D2B48C")
-    .setTitle("☕ โต๊ะลับฉบับ Bear Cafe")
-    .setDescription(
+   .setColor("#D2B48C")
+   .setTitle("☕ โต๊ะลับฉบับ Bear Cafe")
+   .setDescription(
         "บรรยากาศคาเฟ่กำลังดีเลย...\nอยากหาใครสักคนมานั่งคุยด้วยไหมคะ?\n\nกดปุ่มด้านล่างเพื่อเข้าสู่ระบบสุ่มแชท ✨"
       );
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-      .setCustomId(JOIN_QUEUE_CUSTOM_ID)
-      .setLabel("☕ ค้นหาโต๊ะลับ")
-      .setStyle(ButtonStyle.Primary)
+     .setCustomId(JOIN_QUEUE_CUSTOM_ID)
+     .setLabel("☕ ค้นหาโต๊ะลับ")
+     .setStyle(ButtonStyle.Primary)
     );
 
     await message.channel.send({ embeds: [embed], components: [row] });
