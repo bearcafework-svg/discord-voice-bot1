@@ -9,6 +9,14 @@ const {
 
 const crypto = require("crypto");
 
+process.on("unhandledRejection", (error) => {
+  console.error("[secret-chat] Unhandled rejection:", error);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[secret-chat] Uncaught exception:", error);
+});
+
 const SECRET_CHAT_CATEGORY_ID = "1494308739220770888";
 
 const JOIN_QUEUE_CUSTOM_ID = "btn_join_queue";
@@ -100,26 +108,49 @@ async function createSecretChatChannel(guild, userAId, userBId) {
 }
 
 async function handleJoinQueue(interaction) {
+
+  const userId = interaction.user.id;
+
   try {
+
+    // IMPORTANT:
+    // ตอบ Discord ให้เร็วที่สุด ป้องกัน Unknown Interaction
     await interaction.deferReply({
-      flags: 64
+      ephemeral: true
     });
 
-    const userId = interaction.user.id;
+  } catch (error) {
+
+    // interaction หมดอายุแล้ว
+    if (error.code === 10062) {
+      console.log("[secret-chat] Interaction expired before deferReply");
+      return;
+    }
+
+    console.error("[secret-chat] deferReply error:", error);
+    return;
+  }
+
+  try {
 
     if (isUserBusy(userId)) {
+
       await interaction.editReply({
         content: "ตอนนี้คุณอยู่ในคิวหรือกำลังนั่งโต๊ะอยู่แล้วนะคะ ☕"
       });
+
       return;
     }
 
     const waitingUserId = queue.find((id) => id !== userId);
 
+    // มีคนรออยู่ → จับคู่
     if (waitingUserId) {
+
       removeUserFromQueue(waitingUserId);
 
       try {
+
         await createSecretChatChannel(
           interaction.guild,
           waitingUserId,
@@ -131,39 +162,52 @@ async function handleJoinQueue(interaction) {
         });
 
       } catch (error) {
-        console.error("[secret-chat] Match create error:", error);
+
+        console.error("[secret-chat] create room error:", error);
 
         activeUsers.delete(waitingUserId);
         activeUsers.delete(userId);
 
         await interaction.editReply({
-          content: "เกิดปัญหาระหว่างสร้างโต๊ะลับค่ะ ลองใหม่อีกครั้งนะคะ"
+          content:
+            "เกิดปัญหาระหว่างสร้างโต๊ะลับค่ะ\nลองใหม่อีกครั้งนะคะ"
         });
       }
 
       return;
     }
 
+    // ยังไม่มีคู่ → เข้าคิว
     queue.push(userId);
-
-    await interaction.editReply({
-      content:
-        "กำลังหาคนคุยให้ค่ะ ☕\n" +
-        "เมื่อมีคนกดค้นหา ระบบจะจับคู่ให้อัตโนมัติ"
-    });
 
     console.log(`[secret-chat] ${userId} joined queue`);
 
-  } catch (error) {
-    console.error("[secret-chat] Queue error:", error);
+    await interaction.editReply({
+      content:
+        "☕ เข้าคิวเรียบร้อยแล้วค่ะ\n\n" +
+        "ระบบจะจับคู่ให้อัตโนมัติเมื่อมีคนเข้ามาเพิ่ม ✨"
+    });
 
-    if (!interaction.replied && !interaction.deferred) {
-      try {
-        await interaction.reply({
-          content: "เกิดข้อผิดพลาดค่ะ",
-          flags: 64
+  } catch (error) {
+
+    console.error("[secret-chat] Queue processing error:", error);
+
+    try {
+
+      if (interaction.deferred || interaction.replied) {
+
+        await interaction.editReply({
+          content:
+            "เกิดข้อผิดพลาดระหว่างประมวลผลค่ะ\nลองใหม่อีกครั้งนะคะ"
         });
-      } catch {}
+      }
+
+    } catch (editError) {
+
+      // กัน Unknown interaction ซ้ำ
+      if (editError.code !== 10062) {
+        console.error("[secret-chat] editReply error:", editError);
+      }
     }
   }
 }
