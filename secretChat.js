@@ -140,6 +140,9 @@ async function cleanupSession(channelId, userAId, userBId, channel) {
   // ล้าง state ก่อนเสมอ แม้ channel.delete จะพัง
   tableMembers.delete(channelId);
   sessionStartTimes.delete(channelId);
+  tableActionMessages.delete(channelId);
+  reportedByUsers.delete(channelId);
+  claimedReports.delete(channelId);
   activeUsers.delete(userAId);
   activeUsers.delete(userBId);
 
@@ -219,10 +222,14 @@ async function createSecretChatChannel(guild, userAId, userBId) {
 
   const endTime = Math.floor((Date.now() + SESSION_DURATION_MS) / 1000);
 
-  await channel.send({
+  const sentMsg = await channel.send({
     content: `☕ โต๊ะลับพร้อมแล้วค่ะ\n\nยินดีต้อนรับ <@${userAId}> และ <@${userBId}> ✨\nระยะเวลาสนทนา 7 นาที (หมดเวลา: <t:${endTime}:R>)\nสามารถพูดคุยกันได้ตามสบายเลยนะคะ`,
     components: [buildActionRow()]
   });
+
+  // เก็บ message ที่มีปุ่มไว้เพื่อ edit ภายหลัง
+  tableActionMessages.set(channel.id, sentMsg);
+  reportedByUsers.set(channel.id, new Set());
 
   // [FIX] ใช้ channel.id เก็บไว้ก่อน ป้องกัน reference ค้าง
   const channelId = channel.id;
@@ -370,17 +377,36 @@ async function handleLeaveTable(interaction) {
 const claimedReports = new Map();
 const sessionStartTimes = new Map(); // channelId -> timestamp (ms)
 
+// ติดตาม message ที่มีปุ่มแจ้งรีพอร์ต (channelId -> Message)
+const tableActionMessages = new Map();
+// ติดตามว่า user คนไหนกดรีพอร์ตแล้วใน channel นี้ (channelId -> Set<userId>)
+const reportedByUsers = new Map();
+
 const CLAIM_CASE_CUSTOM_ID = "btn_claim_case";
 const STAFF_ALERT_CHANNEL_ID = "1145314688800927744";
 
 async function handleReportUser(interaction) {
   const channelId = interaction.channelId;
   const reporterId = interaction.user.id;
+  const reporterUsername = interaction.user.username;
   const members = tableMembers.get(channelId);
 
   if (!members || !members.has(reporterId)) {
     return await interaction.reply({ content: "ไม่สามารถดำเนินการได้", ephemeral: true });
   }
+
+  // ตรวจสอบว่า user กดรีพอร์ตไปแล้วหรือยัง
+  const reportedSet = reportedByUsers.get(channelId) || new Set();
+  if (reportedSet.has(reporterId)) {
+    return await interaction.reply({
+      content: "⚠️ คุณได้แจ้งรีพอร์ตไปแล้วค่ะ",
+      ephemeral: true,
+    });
+  }
+
+  // บันทึกว่า user นี้กดแล้ว
+  reportedSet.add(reporterId);
+  reportedByUsers.set(channelId, reportedSet);
 
   // แจ้งผู้ใช้ว่ากำลังติดต่อทีมงาน
   try {
@@ -389,6 +415,27 @@ async function handleReportUser(interaction) {
       ephemeral: true,
     });
   } catch (e) { return; }
+
+  // แก้ไขปุ่มแจ้งรีพอร์ตให้ disabled และแสดง username ที่กด
+  try {
+    const actionMsg = tableActionMessages.get(channelId);
+    if (actionMsg) {
+      const disabledReportRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(LEAVE_TABLE_CUSTOM_ID)
+          .setLabel("🚪 ลุกจากโต๊ะ")
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(REPORT_USER_CUSTOM_ID)
+          .setLabel(`⚠️ แจ้งรีพอร์ตโดย ${reporterUsername}`)
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true)
+      );
+      await actionMsg.edit({ components: [disabledReportRow] });
+    }
+  } catch (e) {
+    console.error("[secret-chat] Failed to disable report button:", e);
+  }
 
   try {
     const staffChannel = await interaction.client.channels.fetch(STAFF_ALERT_CHANNEL_ID);
@@ -543,6 +590,9 @@ function setupSecretChat(client) {
       clearSessionTimers(channel.id);
       for (const memberId of members) activeUsers.delete(memberId);
       tableMembers.delete(channel.id);
+      tableActionMessages.delete(channel.id);
+      reportedByUsers.delete(channel.id);
+      claimedReports.delete(channel.id);
       console.log(`[secret-chat] GC: cleaned up manually deleted channel ${channel.id}`);
     }
   });
