@@ -26,6 +26,27 @@ const JOIN_QUEUE_CUSTOM_ID  = "btn_join_queue";
 const LEAVE_TABLE_CUSTOM_ID = "btn_leave_table";
 const REPORT_USER_CUSTOM_ID = "btn_report_user";
 
+
+// ============================================================================
+// LOGGING HELPER
+// ============================================================================
+async function logEvent(event, data = {}) {
+  try {
+    const { error } = await supabase.from("secret_chat_logs").insert([{
+      event,
+      channel_id: data.channelId ?? null,
+      user_id:    data.userId    ?? null,
+      partner_id: data.partnerId ?? null,
+      staff_id:   data.staffId   ?? null,
+      guild_id:   data.guildId   ?? null,
+      metadata:   data.metadata  ?? {},
+    }]);
+    if (error) console.error("[secret-chat] logEvent error:", error.message);
+  } catch (err) {
+    console.error("[secret-chat] logEvent exception:", err.message);
+  }
+}
+
 // ============================================================================
 // IN-MEMORY STATE MANAGEMENT
 // ============================================================================
@@ -118,6 +139,7 @@ async function cleanupSession(channelId, userAId, userBId, channel) {
 
   // ล้าง state ก่อนเสมอ แม้ channel.delete จะพัง
   tableMembers.delete(channelId);
+  sessionStartTimes.delete(channelId);
   activeUsers.delete(userAId);
   activeUsers.delete(userBId);
 
@@ -125,6 +147,15 @@ async function cleanupSession(channelId, userAId, userBId, channel) {
     console.warn(`[secret-chat] cleanupSession: channel object is null, skipping delete`);
     return;
   }
+
+  // คำนวณ duration จาก session_start log
+  const durationMs = Date.now() - (sessionStartTimes.get(channelId) ?? Date.now());
+  await logEvent("session_end", {
+    channelId,
+    userId:   userAId,
+    partnerId: userBId,
+    metadata: { duration_seconds: Math.round(durationMs / 1000), ended_by: "timeout" },
+  });
 
   try {
     await channel.delete("Session timeout reached");
@@ -243,6 +274,7 @@ async function createSecretChatChannel(guild, userAId, userBId) {
   };
 
   sessionTimers.set(channelId, timerData);
+  sessionStartTimes.set(channelId, Date.now());
   console.log(`[secret-chat] Created room ${channel.name} for ${userAId} + ${userBId}`);
   return channel;
 }
@@ -334,6 +366,13 @@ async function handleLeaveTable(interaction) {
   }
 }
 
+// ติดตามเคสที่ถูกรับแล้ว (channelId -> staffId)
+const claimedReports = new Map();
+const sessionStartTimes = new Map(); // channelId -> timestamp (ms)
+
+const CLAIM_CASE_CUSTOM_ID = "btn_claim_case";
+const STAFF_ALERT_CHANNEL_ID = "1145314688800927744";
+
 async function handleReportUser(interaction) {
   const channelId = interaction.channelId;
   const reporterId = interaction.user.id;
@@ -343,28 +382,104 @@ async function handleReportUser(interaction) {
     return await interaction.reply({ content: "ไม่สามารถดำเนินการได้", ephemeral: true });
   }
 
+  // แจ้งผู้ใช้ว่ากำลังติดต่อทีมงาน
   try {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.reply({
+      content: "⚠️ กำลังติดต่อทีมงาน รอสักครู่นะคะ...",
+      ephemeral: true,
+    });
   } catch (e) { return; }
 
-  const membersArray = Array.from(members);
-  const reportedId = membersArray.find((id) => id !== reporterId);
+  try {
+    const staffChannel = await interaction.client.channels.fetch(STAFF_ALERT_CHANNEL_ID);
+    if (!staffChannel) return;
 
-  if (!reportedId) {
-    return await interaction.editReply("ไม่พบผู้ใช้งานที่สามารถรายงานได้");
+    const alertEmbed = new EmbedBuilder()
+      .setColor("#FF4444")
+      .setTitle("🚨 พบการแจ้งปัญหาที่โซนสุ่มแชทคุย")
+      .addFields(
+        { name: "ห้องแชท", value: `<#${channelId}>`, inline: true },
+        { name: "ผู้แจ้ง", value: `<@${reporterId}>`, inline: true },
+        { name: "สถานะ", value: "⏳ รอทีมงานรับเคส", inline: true }
+      )
+      .setTimestamp();
+
+    const claimRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${CLAIM_CASE_CUSTOM_ID}:${channelId}`)
+        .setLabel("✅ รับเคส")
+        .setStyle(ButtonStyle.Danger)
+    );
+
+    await staffChannel.send({
+      content: `<@&${STAFF_ALERT_CHANNEL_ID}>  พบการแจ้งปัญหาที่โซนสุ่มแชทคุย`,
+      embeds: [alertEmbed],
+      components: [claimRow],
+    });
+
+    await logEvent("report_sent", {
+      channelId: channelId,
+      userId:    reporterId,
+      guildId:   interaction.guildId,
+    });
+
+  } catch (err) {
+    console.error("[secret-chat] handleReportUser error:", err);
+  }
+}
+
+async function handleClaimCase(interaction) {
+  // ดึง channelId จาก customId เช่น "btn_claim_case:123456789"
+  const channelId = interaction.customId.split(":")[1];
+  const staffId = interaction.user.id;
+
+  // ตรวจสอบว่าถูกรับไปแล้วหรือยัง
+  if (claimedReports.has(channelId)) {
+    const existingStaff = claimedReports.get(channelId);
+    return await interaction.reply({
+      content: `เคสนี้ถูกรับโดย <@${existingStaff}> แล้วค่ะ`,
+      ephemeral: true,
+    });
   }
 
+  claimedReports.set(channelId, staffId);
+
+  // อัปเดตปุ่มให้กดไม่ได้ + แสดงชื่อคนรับ
+  const disabledRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${CLAIM_CASE_CUSTOM_ID}:${channelId}`)
+      .setLabel(`✅ รับเคสโดย @${interaction.user.username}`)
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(true)
+  );
+
   try {
-    const { error } = await supabase
-      .from("secret_chat_reports")
-      .insert([{ reporter_id: reporterId, reported_id: reportedId, channel_id: channelId }]);
+    await interaction.update({ components: [disabledRow] });
+  } catch (e) {
+    await interaction.reply({ content: "รับเคสเรียบร้อยแล้วค่ะ", ephemeral: true });
+  }
 
-    if (error) throw error;
+  await logEvent("report_claimed", {
+    channelId,
+    staffId:  staffId,
+    guildId:  interaction.guildId,
+  });
 
-    await interaction.editReply("⚠️ ระบบได้รับรายงานเรียบร้อยแล้วค่ะ ข้อมูลถูกบันทึกเพื่อตรวจสอบโดยแอดมิน");
-  } catch (dbError) {
-    console.error("[secret-chat] Supabase Report Error:", dbError);
-    await interaction.editReply("เกิดข้อผิดพลาดในการส่งรายงาน แต่ระบบได้บันทึกความพยายามนี้ไว้แล้วค่ะ");
+  // แอด permission ทีมงานเข้าห้องแชท
+  try {
+    const chatChannel = await interaction.client.channels.fetch(channelId);
+    if (chatChannel) {
+      await chatChannel.permissionOverwrites.create(staffId, {
+        ViewChannel: true,
+        SendMessages: true,
+        ReadMessageHistory: true,
+      });
+
+      // แจ้งในห้องแชทว่าทีมงานรับเรื่องแล้ว
+      await chatChannel.send(`<@${staffId}> รับเรื่องเรียบร้อยค่ะ 🙏`);
+    }
+  } catch (err) {
+    console.error("[secret-chat] handleClaimCase permission error:", err);
   }
 }
 
@@ -409,13 +524,22 @@ function setupSecretChat(client) {
       await handleLeaveTable(interaction);
     } else if (interaction.customId === REPORT_USER_CUSTOM_ID) {
       await handleReportUser(interaction);
+    } else if (interaction.customId.startsWith(CLAIM_CASE_CUSTOM_ID + ":")) {
+      await handleClaimCase(interaction);
     }
   });
 
   // Garbage Collection เมื่อแอดมินลบห้องเอง
-  client.on(Events.ChannelDelete, (channel) => {
+  client.on(Events.ChannelDelete, async (channel) => {
     const members = tableMembers.get(channel.id);
     if (members) {
+      const [uA, uB] = Array.from(members);
+      await logEvent("channel_deleted", {
+        channelId: channel.id,
+        userId:    uA ?? null,
+        partnerId: uB ?? null,
+        metadata:  { ended_by: "admin" },
+      });
       clearSessionTimers(channel.id);
       for (const memberId of members) activeUsers.delete(memberId);
       tableMembers.delete(channel.id);
