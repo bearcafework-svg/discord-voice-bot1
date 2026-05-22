@@ -412,7 +412,7 @@ async function handleReportUser(interaction) {
     );
 
     await staffChannel.send({
-      content: `<@&${STAFF_ALERT_CHANNEL_ID}>  พบการแจ้งปัญหาที่โซนสุ่มแชทคุย`,
+      content: `<@&1144701361448038512> พบการแจ้งปัญหาที่โซนสุ่มแชทคุย`,
       embeds: [alertEmbed],
       components: [claimRow],
     });
