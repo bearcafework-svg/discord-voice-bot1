@@ -194,9 +194,9 @@ function randomFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 async function safeReply(interaction, options) {
   try {
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({ ...options, ephemeral: true });
+      await interaction.followUp({ ...options, flags: 64 });
     } else {
-      await interaction.reply({ ...options, ephemeral: true });
+      await interaction.reply({ ...options, flags: 64 });
     }
   } catch (err) {
     if (err.code !== 40060 && err.code !== 10003) {
@@ -379,15 +379,32 @@ async function cleanupSession(channelId, userAId, userBId, channel) {
 // ============================================================================
 async function runCrashRecovery(client) {
   if (!SECRET_CHAT_CATEGORY_ID) return;
+  // ห้องที่ค้างจาก session ก่อน bot restart จะไม่มี timer — ลบทิ้งทั้งหมด
+  // รอ 3 วิก่อนเพื่อให้ guild cache โหลดเสร็จก่อน
+  await new Promise(r => setTimeout(r, 3000));
   try {
+    let purged = 0;
     for (const guild of client.guilds.cache.values()) {
+      // fetch channels ใหม่เพื่อให้ได้ข้อมูลล่าสุด
+      await guild.channels.fetch().catch(() => {});
       const category = guild.channels.cache.get(SECRET_CHAT_CATEGORY_ID);
       if (!category) continue;
       for (const [, ch] of category.children.cache.filter(c => c.name.includes("☕-โต๊ะลับ-"))) {
-        await ch.delete("Automated cleanup post-restart");
-        console.log(`[secret-chat] Purged orphan: ${ch.name}`);
+        // ถ้าห้องนี้มี timer อยู่แล้ว (สร้างหลัง bot start) ข้ามไป
+        if (tableMembers.has(ch.id)) {
+          console.log(`[secret-chat] Recovery: skip active room ${ch.name}`);
+          continue;
+        }
+        try {
+          await ch.delete("Orphan cleanup post-restart");
+          purged++;
+          console.log(`[secret-chat] Recovery: purged orphan ${ch.name}`);
+        } catch (e) {
+          console.warn(`[secret-chat] Recovery: failed to delete ${ch.name}:`, e.message);
+        }
       }
     }
+    console.log(`[secret-chat] Recovery complete — purged ${purged} orphan room(s)`);
   } catch (err) { console.error("[secret-chat] Recovery failed:", err); }
 }
 
@@ -743,7 +760,7 @@ async function handleExtendTime(interaction) {
 
   if (!deductOk) {
     try {
-      await interaction.followUp({ content: "❌ แต้มไม่เพียงพอค่ะ (ต้องการ 50 แต้ม)", ephemeral: true });
+      await interaction.followUp({ content: "❌ แต้มไม่เพียงพอค่ะ (ต้องการ 50 แต้ม)", flags: 64 });
     } catch (_) {}
     return;
   }
