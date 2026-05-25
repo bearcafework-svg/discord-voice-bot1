@@ -1,6 +1,7 @@
 require('dotenv').config(); // แม้ว่า Koyeb จะจัดการ Env ให้แล้ว แต่เผื่อไว้สำหรับการรัน Local
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 const { setupSecretChat } = require('./secretChat');
+const { setupDonate }    = require('./donate');
 const axios = require("axios");
 const http = require("http");
 const crypto = require("crypto");
@@ -31,6 +32,9 @@ intents: [
 
 // เรียกใช้และเชื่อมต่อโมดูลระบบจับคู่เข้ากับ Client
 setupSecretChat(client);
+
+// เรียกใช้ระบบยอดโดเนท
+setupDonate(client);
 
 function getUserCountInChannel(guild, channelId) {
   if (!channelId) return 0;
