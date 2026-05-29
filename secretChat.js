@@ -27,6 +27,7 @@ const EXTEND_DURATION_MS  = 3 * 60 * 1000; // +3 นาที
 const MAX_EXTENDS         = 2;           // ต่อเวลาได้สูงสุด 2 ครั้งต่อ session
 const PING_COOLDOWN_MS    = 30 * 60 * 1000; // cooldown ping ยศ 5 นาที
 const QUEUE_MAX_WAIT_MS   = 15 * 60 * 1000; // kick ออกจากคิวหลัง 15 นาที
+const QUEUE_DM_KICK_MS    =  5 * 60 * 1000; // kick + DM หากไม่เจอแมตช์ใน 5 นาที
 const IDLE_KICK_MS        = 2 * 60 * 1000;  // ปิดห้องถ้าไม่มีใครพิมพ์ 2 นาที
 const SEARCH_CYCLE_MS     = 5000;        // หมุนข้อความค้นหาทุก 5 วินาที
 
@@ -93,6 +94,7 @@ const handledInteractions = new Set();
 const searchIntervals     = new Map(); // userId -> intervalId (ข้อความค้นหา)
 const queueJoinTimes      = new Map(); // userId -> timestamp ที่เข้าคิว
 const queueTimeoutTimers  = new Map(); // userId -> timeoutId auto-kick จากคิว
+const queueDmTimers       = new Map(); // userId -> timeoutId 5-min DM kick
 const idleKickTimers      = new Map(); // channelId -> timeoutId auto-close idle
 const userSearchMsgToken  = new Map(); // userId -> interaction (เพื่อ edit ได้)
 
@@ -180,6 +182,11 @@ function stopSearchInterval(userId) {
   userSearchMsgToken.delete(userId);
 }
 
+function stopQueueDmTimer(userId) {
+  const t = queueDmTimers.get(userId);
+  if (t) { clearTimeout(t); queueDmTimers.delete(userId); }
+}
+
 function isUserBusy(userId) { return activeUsers.has(userId) || queue.includes(userId); }
 
 function checkSpamRateLimit(userId) {
@@ -207,6 +214,64 @@ async function safeReply(interaction, options) {
     if (err.code !== 40060 && err.code !== 10003) {
       console.error("[secret-chat] safeReply error:", err);
     }
+  }
+}
+
+// ============================================================================
+// DM HELPERS
+// ============================================================================
+
+/**
+ * ทดสอบว่า user เปิดรับ DM อยู่หรือไม่
+ * ส่ง DM ทดสอบแล้วลบทันที เพื่อตรวจสอบ
+ * @returns {boolean} true = ส่ง DM ได้
+ */
+async function checkDmOpen(user) {
+  try {
+    const dm = await user.createDM();
+    const testMsg = await dm.send({ content: "\u200b" }); // zero-width space
+    await testMsg.delete().catch(() => {});
+    return true;
+  } catch (err) {
+    // 50007 = Cannot send messages to this user (DM ปิด)
+    return false;
+  }
+}
+
+/**
+ * ส่ง DM แจ้งเตือนเมื่อจับคู่สำเร็จ
+ */
+async function sendMatchDm(client, userId, channelId, guildId) {
+  try {
+    const user = await client.users.fetch(userId);
+    await user.send(
+      `✨ **จับคู่สำเร็จแล้วค่ะ!**\n` +
+      `☕ โต๊ะลับของคุณพร้อมแล้ว — กดลิงก์ด้านล่างเพื่อเข้าห้องได้เลยค่ะ\n` +
+      `👉 https://discord.com/channels/${guildId}/${channelId}\n\n` +
+      `*ขอให้สนุกกับการสนทนานะคะ ☕*`
+    );
+  } catch (err) {
+    // DM อาจปิดอยู่ — ไม่ต้อง throw
+    console.warn(`[secret-chat] sendMatchDm failed for ${userId}:`, err.message);
+  }
+}
+
+/**
+ * ส่ง DM แจ้งเมื่อถูก kick ออกจากคิวเพราะไม่เจอแมตช์ใน 5 นาที
+ */
+async function sendQueueTimeoutDm(client, userId) {
+  try {
+    const user = await client.users.fetch(userId);
+    await user.send(
+      `⏰ **ไม่พบคู่สนทนาภายใน 5 นาทีค่ะ**\n\n` +
+      `ระบบได้นำคุณออกจากคิวอัตโนมัติแล้วเนื่องจาก:\n` +
+      `• ขณะนี้ยังไม่มีผู้ใช้คนอื่นรออยู่ในคิว\n` +
+      `• เพื่อประหยัดพื้นที่และรักษาประสิทธิภาพระบบ\n\n` +
+      `☕ **กดเข้าคิวใหม่ได้เลยถ้ายังอยากหาเพื่อนคุยนะคะ!**\n` +
+      `*(ช่วงเวลาที่มีคนเล่นเยอะมักเป็นช่วงเย็น-ดึกค่ะ)*`
+    );
+  } catch (err) {
+    console.warn(`[secret-chat] sendQueueTimeoutDm failed for ${userId}:`, err.message);
   }
 }
 
@@ -528,7 +593,17 @@ async function handleJoinQueue(interaction) {
   if (isUserBusy(userId)) return await interaction.editReply("ตอนนี้คุณอยู่ในคิวหรือกำลังนั่งโต๊ะอยู่แล้วนะคะ ☕");
   if (checkSpamRateLimit(userId)) return await interaction.editReply("คุณทำรายการบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่ค่ะ ⏳");
 
-  // ── เช็ค DND ──────────────────────────────────────────────────────────────
+  // ── เช็คว่าเปิด DM ไว้หรือยัง ───────────────────────────────────────────
+  const dmOpen = await checkDmOpen(interaction.user);
+  if (!dmOpen) {
+    return await interaction.editReply(
+      "📩 **กรุณาเปิดรับ DM ก่อนใช้งานโต๊ะลับนะคะ!**\n\n" +
+      "ระบบจำเป็นต้องส่ง DM เพื่อแจ้งเตือนเมื่อจับคู่สำเร็จค่ะ\n\n" +
+      "**วิธีเปิด DM:**\n" +
+      "⚙️ Settings → Privacy & Safety → Allow direct messages from server members ✅\n\n" +
+      "*หลังเปิดแล้วกดปุ่ม ☕ ค้นหาโต๊ะลับ ใหม่อีกครั้งได้เลยค่ะ*"
+    );
+  }
   const presence = interaction.guild?.members?.cache.get(userId)?.presence;
   const status   = presence?.status ?? "offline";
   if (status === "dnd") {
@@ -549,6 +624,7 @@ async function handleJoinQueue(interaction) {
     const [waitingUserId] = queue.splice(partnerIndex, 1);
     // หยุด search interval + queue timeout ของคนที่รออยู่
     stopSearchInterval(waitingUserId);
+    stopQueueDmTimer(waitingUserId);
     queueJoinTimes.delete(waitingUserId);
     const wTimer = queueTimeoutTimers.get(waitingUserId);
     if (wTimer) { clearTimeout(wTimer); queueTimeoutTimers.delete(waitingUserId); }
@@ -556,6 +632,7 @@ async function handleJoinQueue(interaction) {
     queueJoinTimes.delete(userId);
     const uTimer = queueTimeoutTimers.get(userId);
     if (uTimer) { clearTimeout(uTimer); queueTimeoutTimers.delete(userId); }
+    stopQueueDmTimer(userId);
     try {
       const channel = await createSecretChatChannel(interaction.guild, waitingUserId, userId);
       await interaction.editReply(`จับคู่สำเร็จแล้วค่ะ ✨ ไปที่ห้อง <#${channel.id}> ได้เลย ขอให้สนุกนะคะ`);
@@ -565,6 +642,12 @@ async function handleJoinQueue(interaction) {
         try { await waitingInteraction.editReply(`จับคู่สำเร็จแล้วค่ะ ✨ ไปที่ห้อง <#${channel.id}> ได้เลย ขอให้สนุกนะคะ`); }
         catch (_) {}
       }
+      // ── ส่ง DM แจ้งเตือนทั้ง 2 คน ─────────────────────────────────────
+      const guildId = interaction.guildId;
+      await Promise.allSettled([
+        sendMatchDm(interaction.client, waitingUserId, channel.id, guildId),
+        sendMatchDm(interaction.client, userId,        channel.id, guildId),
+      ]);
     } catch (err) {
       console.error("[secret-chat] create room error:", err);
       activeUsers.delete(waitingUserId);
@@ -575,6 +658,31 @@ async function handleJoinQueue(interaction) {
     queue.push(userId);
     queueJoinTimes.set(userId, Date.now());
     console.log(`[secret-chat] ${userId} joined queue. Total: ${queue.length}`);
+
+    // ── Auto-kick + DM หลัง 5 นาที ถ้ายังไม่เจอแมตช์ ────────────────────
+    const dmKickTimer = setTimeout(async () => {
+      const stillInQueue = queue.indexOf(userId);
+      if (stillInQueue === -1) return; // ถูก match ไปแล้ว
+      queue.splice(stillInQueue, 1);
+      queueJoinTimes.delete(userId);
+      queueDmTimers.delete(userId);
+      stopSearchInterval(userId);
+      // ยกเลิก 15-min timer ด้วย เพราะ kick แล้ว
+      const qTimer15 = queueTimeoutTimers.get(userId);
+      if (qTimer15) { clearTimeout(qTimer15); queueTimeoutTimers.delete(userId); }
+      activeUsers.delete(userId);
+      await updateLobbyEmbed();
+      // ส่ง DM แจ้งสาเหตุ
+      await sendQueueTimeoutDm(interaction.client, userId);
+      // แก้ข้อความ searching ให้รู้ว่าถูก kick แล้ว
+      try {
+        await interaction.editReply({
+          content: "⏰ **ไม่พบคู่สนทนาภายใน 5 นาทีค่ะ**\nระบบนำคุณออกจากคิวอัตโนมัติแล้ว กรุณาตรวจสอบ DM จากบอทสำหรับรายละเอียดเพิ่มเติมค่ะ ☕",
+          components: []
+        });
+      } catch (_) {}
+    }, QUEUE_DM_KICK_MS);
+    queueDmTimers.set(userId, dmKickTimer);
 
     // ── Auto-kick หลัง 15 นาที ───────────────────────────────────────────
     const queueTimer = setTimeout(async () => {
@@ -646,6 +754,7 @@ async function handleCancelQueue(interaction) {
 
   queue.splice(idx, 1);
   stopSearchInterval(userId);
+  stopQueueDmTimer(userId);
   queueJoinTimes.delete(userId);
   const qTimer = queueTimeoutTimers.get(userId);
   if (qTimer) { clearTimeout(qTimer); queueTimeoutTimers.delete(userId); }
